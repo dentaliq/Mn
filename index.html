@@ -1,1528 +1,462 @@
-<!DOCTYPE html>
-<html lang="ar" dir="rtl">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>سوبر ماركت العراق - تصميم احترافي</title>
-    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <style>
-        /* Variables and Basic Styles */
-        :root {
-            --primary: #0f121a;
-            --primary-light: #1c212c;
-            --secondary: #e74c3c;
-            --secondary-dark: #c0392b;
-            --accent: #ffb833;
-            --accent-dark: #cc9228;
-            --text-light: #ffffff;
-            --text-dark: #bdc3c7;
-            --shadow-1: 0 4px 8px rgba(0,0,0,0.3);
-            --shadow-2: 0 8px 16px rgba(0,0,0,0.5);
-            --shadow-3: 0 12px 24px rgba(0,0,0,0.7);
-            --border-radius: 12px;
-            --button-shadow: 0 4px 10px rgba(0, 0, 0, 0.4);
-            --button-hover-shadow: 0 6px 15px rgba(0, 0, 0, 0.6);
-        }
+import os
+import requests
+import json
+import math
+import qrcode
+from datetime import datetime
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib import colors
+from reportlab.lib.units import inch
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+from reportlab.lib.enums import TA_RIGHT, TA_CENTER, TA_LEFT
 
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
+# دعم اللغة العربية
+import arabic_reshaper
+from bidi.algorithm import get_display
 
-        body {
-            font-family: 'Tajawal', sans-serif;
-            background-color: var(--primary);
-            color: var(--text-dark);
-            line-height: 1.6;
-            direction: rtl;
-            overflow-x: hidden;
-            position: relative;
-        }
+# إعداد تطبيق Flask
+app = Flask(__name__)
+CORS(app)
 
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 0 20px;
-        }
-        
-        .hidden-until-start {
-            display: none;
-            opacity: 0;
-            transition: opacity 0.8s ease-in-out;
-        }
+# بيانات بوت تيليجرام
+BOT_TOKEN = '8256210377:AAH7ogEPTvIUo9hyY2p8uCkF-Yby13weXkk'
+CHAT_ID = '7836619198'
 
-        .show-content {
-            display: block;
-            opacity: 1;
-        }
+# موقع المتجر الفعلي (تم تحديثه)
+MARKET_LOCATION = {'lat': 32.6468089, 'lng': 43.9782430}
+MARKET_ADDRESS = "سوق الكفاءات، شارع بغداد، كربلاء المقدسة"
 
-        /* Loading Screen */
-        .loading-container {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-            background-color: var(--primary);
-            z-index: 1000;
-            transition: opacity 0.5s ease;
-        }
-        
-        .loading-container.hidden {
-            opacity: 0;
-            pointer-events: none;
-        }
+# تسجيل خطوط عربية جديدة
+try:
+    pdfmetrics.registerFont(TTFont('Janna-LT-Regular', 'alfont_com_Janna-LT-Regular.ttf'))
+    pdfmetrics.registerFont(TTFont('Janna-LT-Bold', 'alfont_com_Janna-LT-Bold.ttf'))
+    ARABIC_FONT = 'Janna-LT-Regular'
+    ARABIC_FONT_BOLD = 'Janna-LT-Bold'
+    print("تم تحميل خطوط Janna بنجاح")
+except Exception as e:
+    print(f"خطأ في تحميل الخط العربي: {e}. سيتم استخدام الخطوط الافتراضية كبديل.")
+    ARABIC_FONT = 'Helvetica'
+    ARABIC_FONT_BOLD = 'Helvetica-Bold'
 
-        .loader-dots {
-            display: flex;
-            gap: 15px;
-        }
+# دالة لمعالجة النص العربي (حروف متصلة + RTL)
+def rtl(text):
+    if not text:
+        return ""
+    reshaped_text = arabic_reshaper.reshape(text)
+    bidi_text = get_display(reshaped_text)
+    return bidi_text
 
-        .loader-dots div {
-            width: 20px;
-            height: 20px;
-            background: var(--secondary);
-            border-radius: 50%;
-            animation: bounce-dots 1s infinite ease-in-out;
-        }
-        
-        .loader-dots div:nth-child(2) {
-            animation-delay: 0.2s;
-            background: var(--accent);
-        }
-        
-        .loader-dots div:nth-child(3) {
-            animation-delay: 0.4s;
-            background: var(--text-light);
-        }
+# دالة لحساب المسافة
+def haversine_distance(lat1, lon1, lat2, lon2):
+    R = 6371e3
+    φ1 = math.radians(lat1)
+    φ2 = math.radians(lat2)
+    Δφ = math.radians(lat2 - lat1)
+    Δλ = math.radians(lon2 - lon1)
+    a = math.sin(Δφ / 2) ** 2 + math.cos(φ1) * math.cos(φ2) * math.sin(Δλ / 2) ** 2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c
 
-        @keyframes bounce-dots {
-            0%, 100% { transform: translateY(0); }
-            50% { transform: translateY(-20px); }
-        }
+# إرسال رسالة نصية
+def send_telegram_message(text, chat_id=CHAT_ID):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    payload = {'chat_id': chat_id, 'text': text, 'parse_mode': 'HTML'}
+    try:
+        response = requests.post(url, json=payload, timeout=10)
+        response.raise_for_status()
+        print(f"تم إرسال الرسالة بنجاح: {response.json()}")
+        return response
+    except requests.exceptions.RequestException as e:
+        print(f"خطأ في إرسال الرسالة إلى تيليجرام: {e}")
+        return None
 
-        .loading-text {
-            color: var(--text-light);
-            font-size: 1.5rem;
-            font-weight: bold;
-            margin-top: 20px;
-            animation: pulse-text 2s infinite;
-        }
+# إرسال ملف PDF
+def send_telegram_document(file_path, chat_id=CHAT_ID, caption=''):
+    print(f"محاولة إرسال الملف من المسار: {file_path}")
+    if not os.path.exists(file_path):
+        print(f"خطأ: الملف غير موجود في المسار: {file_path}")
+        return None
 
-        @keyframes pulse-text {
-            0% { opacity: 0.5; }
-            50% { opacity: 1; }
-            100% { opacity: 0.5; }
-        }
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
+    try:
+        with open(file_path, 'rb') as f:
+            files = {'document': f}
+            payload = {'chat_id': chat_id, 'caption': caption}
+            response = requests.post(url, data=payload, files=files, timeout=30)
+            response.raise_for_status()
+            print(f"تم إرسال الملف بنجاح: {response.json()}")
+            os.remove(file_path)
+            print(f"تم حذف ملف PDF: {file_path}")
+            return response
+    except requests.exceptions.RequestException as e:
+        print(f"خطأ في إرسال الملف إلى تيليجرام: {e}")
+        return None
+    except Exception as e:
+        print(f"خطأ غير متوقع: {e}")
+        return None
 
-        /* Floating View Orders Button */
-        .floating-view-orders {
-            position: fixed;
-            bottom: 30px;
-            left: 30px;
-            background: var(--accent);
-            color: var(--primary);
-            padding: 15px 25px;
-            border-radius: 10px;
-            font-weight: 700;
-            font-size: 1.1rem;
-            box-shadow: var(--shadow-2);
-            transition: all 0.4s cubic-bezier(0.25, 0.8, 0.25, 1);
-            z-index: 100;
-            display: none;
-            align-items: center;
-            cursor: pointer;
-            border: none;
-            text-shadow: none;
-        }
-        
-        .floating-view-orders:hover {
-            transform: scale(1.05) translateY(-5px);
-            background-color: var(--accent-dark);
-            box-shadow: var(--shadow-3);
-        }
-        
-        .floating-view-orders i {
-            margin-right: 10px;
-        }
-        
-        /* Main Sections */
-        .header {
-            background: var(--primary);
-            color: var(--text-light);
-            padding: 100px 0;
-            text-align: center;
-            box-shadow: var(--shadow-2);
-        }
+def get_file_link(file_id):
+    """الحصول على رابط الملف من التيليجرام."""
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/getFile"
+    payload = {'file_id': file_id}
+    try:
+        response = requests.get(url, params=payload)
+        response.raise_for_status()
+        file_path = response.json()['result']['file_path']
+        file_link = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
+        return file_link
+    except requests.exceptions.RequestException as e:
+        print(f"خطأ في الحصول على رابط الملف: {e}")
+        return None
 
-        .header h1 {
-            font-size: 3.5rem;
-            margin-bottom: 15px;
-            font-weight: 900;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
-            letter-spacing: 2px;
-            color: var(--secondary);
-        }
-        
-        /* Category Menu */
-        .category-menu {
-            padding: 60px 0;
-            text-align: center;
-        }
-
-        .category-menu h2 {
-            font-size: 2.5rem;
-            margin-bottom: 50px;
-            color: var(--text-light);
-            position: relative;
-            display: inline-block;
-            text-shadow: 1px 1px 2px rgba(0,0,0,0.1);
-        }
-
-        .category-menu h2::after {
-            content: "";
-            position: absolute;
-            bottom: -15px;
-            right: 0;
-            width: 100%;
-            height: 4px;
-            background-color: var(--secondary);
-            border-radius: 2px;
-            transform: scaleX(0);
-            transform-origin: right;
-            animation: line-grow 1s forwards 0.5s ease-out;
-        }
-        
-        @keyframes line-grow { to { transform: scaleX(1); } }
-
-        .category-list {
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: center;
-            gap: 25px;
-        }
-        
-        .category-item {
-            background-color: var(--primary-light);
-            border-radius: var(--border-radius);
-            box-shadow: var(--shadow-1);
-            padding: 30px;
-            text-align: center;
-            flex: 1;
-            min-width: 200px;
-            max-width: 250px;
-            transition: all 0.4s cubic-bezier(0.25, 0.8, 0.25, 1);
-            cursor: pointer;
-            border-top: 5px solid var(--secondary);
-            transform: translateY(20px);
-            opacity: 0;
-            animation: fade-up 0.6s forwards;
-            position: relative;
-            overflow: hidden;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-        }
-        
-        @keyframes fade-up { to { transform: translateY(0); opacity: 1; } }
-
-        .category-item:hover {
-            transform: translateY(-8px) scale(1.03);
-            box-shadow: var(--shadow-2);
-            border-color: var(--accent);
-            background-color: #1c212c;
-        }
-
-        .category-item::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(255, 255, 255, 0.05);
-            transform: scale(0);
-            border-radius: 50%;
-            transition: transform 0.5s ease-out;
-            z-index: 0;
-        }
-        
-        .category-item:hover::before {
-            transform: scale(2);
-        }
-        
-        .category-item i {
-            font-size: 3rem;
-            color: var(--accent);
-            margin-bottom: 20px;
-            transition: transform 0.3s ease, color 0.3s ease;
-            position: relative;
-            z-index: 1;
-        }
-
-        .category-item:hover i {
-            transform: scale(1.1);
-            color: var(--secondary);
-        }
-
-        .category-item h3 {
-            font-size: 1.2rem;
-            font-weight: 700;
-            color: var(--text-light);
-            position: relative;
-            z-index: 1;
-        }
-
-        /* Product Lightbox (Modal) */
-        .modal {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background-color: rgba(0, 0, 0, 0.85);
-            display: none;
-            justify-content: center;
-            align-items: center;
-            z-index: 200;
-            opacity: 0;
-            transition: opacity 0.4s ease;
-        }
-
-        .modal.show {
-            display: flex;
-            opacity: 1;
-        }
-
-        .modal-content {
-            background: var(--primary);
-            padding: 30px;
-            border-radius: var(--border-radius);
-            width: 90%;
-            max-width: 800px;
-            max-height: 90vh;
-            overflow-y: auto;
-            position: relative;
-            box-shadow: var(--shadow-3);
-            transform: translateY(-50px);
-            opacity: 0;
-            animation: modal-fade-in 0.5s forwards ease-out;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-        }
-        
-        @keyframes modal-fade-in {
-            to { transform: translateY(0); opacity: 1; }
-        }
-        
-        .modal-content h2 {
-            text-align: center;
-            margin-bottom: 20px;
-            color: var(--secondary);
-            border-bottom: 2px solid var(--accent);
-            padding-bottom: 10px;
-        }
-        
-        .product-grid-lightbox {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 20px;
-        }
-
-        .product-card-lightbox {
-            background-color: var(--primary-light);
-            border-radius: 10px;
-            box-shadow: var(--shadow-1);
-            overflow: hidden;
-            transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
-            cursor: pointer;
-            position: relative;
-        }
-        
-        .product-card-lightbox:hover {
-            transform: translateY(-5px);
-            box-shadow: var(--shadow-2);
-        }
-        
-        .product-card-lightbox img {
-            width: 100%;
-            height: 250px;
-            object-fit: contain;
-            background-color: #2a2a2a;
-            transition: transform 0.3s ease;
-        }
-        
-        .product-card-lightbox:hover img {
-            transform: scale(1.05);
-        }
-
-        .product-card-lightbox .product-details {
-            padding: 15px;
-            text-align: center;
-        }
-
-        .product-card-lightbox h3 {
-            font-size: 1.1rem;
-            font-weight: 700;
-            color: var(--text-light);
-            margin-bottom: 5px;
-        }
-
-        .product-card-lightbox .price {
-            font-size: 1.1rem;
-            font-weight: 900;
-            color: var(--accent);
-        }
-        
-        .modal .close-btn {
-            position: absolute;
-            top: 15px;
-            left: 15px;
-            font-size: 2rem;
-            color: var(--text-dark);
-            cursor: pointer;
-            transition: transform 0.3s ease;
-        }
-
-        .modal .close-btn:hover {
-            transform: rotate(90deg);
-            color: var(--secondary);
-        }
-
-        /* Order Review Modal */
-        .order-review {
-            text-align: center;
-        }
-
-        .order-review h2 {
-            margin-bottom: 20px;
-            color: var(--secondary);
-        }
-
-        .order-review ul {
-            list-style: none;
-            padding: 0;
-            border: 1px solid var(--text-dark);
-            border-radius: var(--border-radius);
-            margin-bottom: 20px;
-            background-color: var(--primary-light);
-        }
-
-        .order-review li {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 15px;
-            border-bottom: 1px dashed var(--text-dark);
-            transition: all 0.3s ease;
-        }
-        .order-review li:hover {
-            background-color: #1c212c;
-        }
-        
-        .order-review li .item-actions {
-            display: flex;
-            align-items: center;
-            gap: 15px;
-        }
-        
-        .order-review li .quantity-controls button {
-            background-color: var(--secondary);
-            color: var(--text-light);
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            padding: 5px 10px;
-            transition: all 0.2s;
-            font-size: 1rem;
-        }
-        
-        .order-review li .quantity-controls button:hover {
-            transform: scale(1.1);
-            background-color: var(--secondary-dark);
-        }
-        
-        .order-review li .remove-item-btn {
-            background-color: var(--secondary);
-            color: var(--text-light);
-            border: none;
-            border-radius: 5px;
-            padding: 8px 12px;
-            cursor: pointer;
-            font-size: 0.9rem;
-            transition: transform 0.2s ease;
-        }
-        
-        .order-review li .remove-item-btn:hover {
-            transform: scale(1.05);
-            background-color: var(--secondary-dark);
-        }
-
-        .order-review li:last-child {
-            border-bottom: none;
-        }
-
-        .order-review h4 {
-            font-weight: 500;
-            margin: 0;
-            color: var(--text-light);
-        }
-        
-        .order-review li .item-details {
-            flex-grow: 1;
-            text-align: right;
-        }
-        
-        .order-review li .item-details p {
-            margin: 0;
-            color: var(--text-dark);
-        }
-
-        .order-review .total-price {
-            font-size: 1.7rem;
-            font-weight: 900;
-            color: var(--accent);
-            background-color: var(--primary-light);
-            padding: 15px 30px;
-            border-radius: 10px;
-            margin-top: 30px;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
-            position: relative;
-            overflow: hidden;
-            animation: pulse-price 2s infinite alternate;
-        }
-
-        @keyframes pulse-price {
-            0% { transform: scale(1); box-shadow: 0 0 10px rgba(255, 184, 51, 0.5); }
-            100% { transform: scale(1.03); box-shadow: 0 0 20px rgba(255, 184, 51, 0.8); }
-        }
-        
-        .order-review .btn-group {
-            display: flex;
-            justify-content: center;
-            gap: 20px;
-            margin-top: 30px;
-        }
-
-        /* Generic Button Style for Modals/Actions */
-        .btn {
-            padding: 15px 30px;
-            border-radius: 10px;
-            font-weight: 700;
-            font-size: 1.1rem;
-            transition: all 0.3s ease;
-            box-shadow: var(--shadow-1);
-            border: none;
-            cursor: pointer;
-            text-shadow: 1px 1px 2px rgba(0,0,0,0.2);
-            position: relative;
-            overflow: hidden;
-            isolation: isolate;
-        }
-        
-        .btn:hover {
-            transform: translateY(-3px) scale(1.02);
-            box-shadow: var(--button-hover-shadow);
-        }
-
-        /* Specific Button Styles */
-        #continueOrderingBtn {
-            background: linear-gradient(45deg, #444, #777);
-            color: var(--text-light);
-        }
-        
-        #continueOrderingBtn:hover {
-            background: linear-gradient(45deg, #777, #999);
-        }
-        
-        #finalizeOrderBtn {
-            background: linear-gradient(45deg, var(--secondary), var(--secondary-dark));
-            color: #fff;
-        }
-        
-        #finalizeOrderBtn:hover {
-            background: linear-gradient(45deg, var(--secondary-dark), #e74c3c);
-        }
-        
-        /* Quantity Modal */
-        .quantity-modal .modal-content {
-            text-align: center;
-            max-width: 400px;
-        }
-        
-        .quantity-modal h3 {
-            font-size: 1.5rem;
-            margin-bottom: 20px;
-            color: var(--text-light);
-        }
-        
-        .quantity-modal .quantity-input {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            gap: 10px;
-            margin-bottom: 20px;
-        }
-        
-        .quantity-modal .quantity-input input {
-            width: 80px;
-            text-align: center;
-            font-size: 1.2rem;
-            padding: 8px;
-            border: 1px solid var(--text-dark);
-            border-radius: 5px;
-            background-color: var(--primary-light);
-            color: var(--text-light);
-        }
-        
-        .quantity-modal .quantity-input button {
-            background-color: var(--secondary);
-            color: var(--text-light);
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            padding: 8px 12px;
-            transition: all 0.2s;
-            box-shadow: var(--shadow-1);
-        }
-        
-        .quantity-modal .quantity-input button:hover {
-            transform: scale(1.1);
-            background-color: var(--secondary-dark);
-        }
-        
-        .quantity-modal .btn-group {
-            display: flex;
-            justify-content: center;
-            gap: 15px;
-        }
-        
-        .quantity-modal .btn {
-            padding: 12px 25px;
-            border: none;
-            border-radius: 8px;
-            font-weight: bold;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            box-shadow: var(--button-shadow);
-        }
-        
-        .quantity-modal .confirm-btn {
-            background-color: var(--secondary);
-            color: var(--text-light);
-        }
-        
-        /* Order Modal (for user details) */
-        .order-modal .modal-content {
-            max-width: 450px;
-        }
-        
-        .order-modal form p {
-            text-align: right;
-            margin-bottom: 15px;
-            color: var(--text-light);
-        }
-        
-        .order-modal form input[type="text"],
-        .order-modal form input[type="tel"] {
-            width: 100%;
-            padding: 12px;
-            border: none;
-            border-radius: 8px;
-            font-size: 1rem;
-            margin-top: 5px;
-            background-color: var(--primary-light);
-            color: var(--text-light);
-            transition: all 0.3s ease;
-        }
-        
-        .order-modal form input[type="text"]:focus,
-        .order-modal form input[type="tel"]:focus {
-            background-color: #2a303d;
-            box-shadow: 0 0 0 2px var(--secondary);
-            outline: none;
-        }
-        
-        /* Custom file input styling */
-        .file-input-wrapper {
-            display: block;
-            width: 100%;
-            margin-top: 15px;
-            text-align: center;
-        }
-        
-        .file-input-label {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            padding: 12px 25px;
-            background-color: var(--primary-light);
-            border: 2px dashed var(--text-dark);
-            border-radius: 10px;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            font-size: 1rem;
-            color: var(--text-dark);
-            position: relative;
-            overflow: hidden;
-        }
-        
-        .file-input-label i {
-            margin-left: 10px;
-            transition: transform 0.3s ease;
-            font-size: 1.2rem;
-            color: var(--secondary);
-        }
-        
-        .file-input-label:hover {
-            background-color: #2a303d;
-            border-color: var(--secondary);
-            color: var(--secondary);
-        }
-        
-        .file-input-label:hover i {
-            transform: scale(1.1);
-        }
-        
-        /* No loading, just instant state change */
-        .file-input-label.selected {
-            border-color: var(--secondary);
-            color: var(--secondary);
-            background-color: #2a303d;
-            box-shadow: var(--shadow-1);
-        }
-        
-        #houseImage {
-            display: none;
-        }
-        
-        .file-input-label .fa-check {
-            color: var(--secondary);
-            font-size: 1.5rem;
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            animation: pop-in 0.3s forwards;
-        }
-        
-        @keyframes pop-in {
-            0% { transform: translate(-50%, -50%) scale(0.5); opacity: 0; }
-            100% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
-        }
-        
-        .order-modal .btn-group {
-            display: flex;
-            justify-content: center;
-            margin-top: 20px;
-        }
-        
-        /* Success Modal */
-        .success-modal .modal-content {
-            text-align: center;
-            max-width: 400px;
-            background-color: var(--primary-light);
-        }
-        
-        .success-modal i.fa-check-circle {
-            font-size: 4rem;
-            color: #2ecc71;
-            margin-bottom: 20px;
-            animation: bounceIn 0.8s ease;
-        }
-        
-        @keyframes bounceIn {
-            0% { transform: scale(0.3); opacity: 0; }
-            50% { transform: scale(1.1); opacity: 1; }
-            70% { transform: scale(0.9); }
-            100% { transform: scale(1); }
-        }
-        
-        .success-modal h3 {
-            color: var(--text-light);
-            margin-bottom: 10px;
-        }
-        
-        .success-modal p {
-            color: var(--text-dark);
-            margin-bottom: 20px;
-        }
-        
-        /* Added to Cart Modal */
-        .added-to-cart-modal .modal-content {
-            max-width: 350px;
-            text-align: center;
-            background-color: var(--secondary);
-            color: #fff;
-            border: none;
-        }
-        
-        .added-to-cart-modal h3 {
-            font-size: 1.5rem;
-            color: #fff;
-            margin-bottom: 10px;
-        }
-        
-        .added-to-cart-modal i {
-            font-size: 3rem;
-            color: #fff;
-            margin-bottom: 15px;
-        }
-        
-        /* GPS button styling */
-        .location-btn {
-            background: var(--text-dark);
-            color: var(--primary);
-            border-radius: 10px;
-            padding: 12px 25px;
-            font-weight: bold;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 10px;
-            margin-top: 15px;
-            box-shadow: var(--button-shadow);
-            border: none;
-        }
-        
-        .location-btn.success {
-            background: var(--secondary);
-            color: var(--text-light);
-        }
-        
-        .location-btn:hover {
-            transform: translateY(-2px);
-            box-shadow: var(--button-hover-shadow);
-        }
-        
-        .location-btn.success:hover {
-            background-color: var(--secondary-dark);
-        }
-        
-        .location-btn .gps-icon-container {
-            display: inline-block;
-            animation: none;
-            position: relative;
-            width: 20px;
-            height: 20px;
-        }
-        
-        .location-btn.success .gps-icon-container {
-            animation: pulse-gps 1.5s infinite;
-        }
-        
-        @keyframes pulse-gps {
-            0% { transform: scale(1); opacity: 1; }
-            50% { transform: scale(1.2); opacity: 0.5; }
-            100% { transform: scale(1); opacity: 1; }
-        }
-        
-        /* Order Form Submit Button */
-        .order-modal .btn-group .confirm-btn {
-            background: var(--secondary);
-            color: var(--text-light);
-            font-size: 1.1rem;
-            padding: 12px 40px;
-            border: none;
-            border-radius: 10px;
-            font-weight: 700;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            box-shadow: var(--shadow-1);
-            position: relative;
-            overflow: hidden;
-            z-index: 1;
-        }
-        
-        .order-modal .btn-group .confirm-btn::before {
-            content: '';
-            position: absolute;
-            top: -50%;
-            left: -50%;
-            width: 200%;
-            height: 200%;
-            background: rgba(255,255,255,0.1);
-            transform: rotate(45deg);
-            transition: all 0.5s ease;
-            z-index: -1;
-            opacity: 0;
-        }
-        
-        .order-modal .btn-group .confirm-btn:hover::before {
-            top: -20%;
-            left: -20%;
-            opacity: 1;
-        }
-        
-        /* Delete confirmation modal */
-        .delete-confirmation-modal .modal-content {
-            background-color: var(--primary-light);
-            border-left: 5px solid var(--secondary);
-            text-align: center;
-            max-width: 400px;
-        }
-        
-        .delete-confirmation-modal .modal-content i {
-            font-size: 3rem;
-            color: var(--secondary);
-            margin-bottom: 15px;
-        }
-        
-        .delete-confirmation-modal h3 {
-            color: var(--text-light);
-        }
-        
-        .delete-confirmation-modal .btn-group {
-            margin-top: 20px;
-        }
-        
-        .delete-confirmation-modal .btn {
-            padding: 10px 20px;
-            border-radius: 5px;
-            font-weight: bold;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .delete-confirmation-modal .confirm-delete-btn {
-            background-color: var(--secondary);
-            color: var(--text-light);
-        }
-        
-        .delete-confirmation-modal .cancel-delete-btn {
-            background-color: var(--primary-light);
-            color: var(--text-light);
-        }
-        
-        .delete-confirmation-modal .confirm-delete-btn:hover {
-            background-color: var(--secondary-dark);
-        }
-        
-        .delete-confirmation-modal .cancel-delete-btn:hover {
-            background-color: #2a303d;
-        }
-        
-        /* Empty Cart Modal */
-        .empty-cart-modal .modal-content {
-            background-color: var(--primary-light);
-            border-left: 5px solid var(--accent);
-            text-align: center;
-            max-width: 400px;
-        }
-        
-        .empty-cart-modal .modal-content i {
-            font-size: 3rem;
-            color: var(--accent);
-            margin-bottom: 15px;
-            animation: shake 0.5s ease-in-out;
-        }
-        
-        @keyframes shake {
-            0% { transform: rotate(0deg); }
-            10% { transform: rotate(-10deg); }
-            20% { transform: rotate(10deg); }
-            30% { transform: rotate(-10deg); }
-            40% { transform: rotate(10deg); }
-            50% { transform: rotate(-10deg); }
-            60% { transform: rotate(10deg); }
-            70% { transform: rotate(-10deg); }
-            80% { transform: rotate(10deg); }
-            90% { transform: rotate(-10deg); }
-            100% { transform: rotate(0deg); }
-        }
-    </style>
-</head>
-<body>
-
-    <div id="loadingContainer" class="loading-container">
-        <div class="loader-dots">
-            <div></div>
-            <div></div>
-            <div></div>
-        </div>
-        <p class="loading-text">جاري تحميل المحتوى...</p>
-    </div>
+# إنشاء فاتورة PDF محسنة
+def create_order_pdf(order_details, photo_link=None, filename="order.pdf"):
+    print(f"محاولة إنشاء ملف PDF: {filename}")
+    qr_img_path_customer = None
+    qr_img_path_market = None
+    qr_img_path_photo = None
     
-    <button id="viewOrdersButton" class="floating-view-orders">
-        <i class="fas fa-list-check"></i> عرض الطلبات
-    </button>
-    
-    <div id="mainContent" class="hidden-until-start">
-        <header class="header">
-            <div class="container">
-                <h1>سوبر ماركت العراق</h1>
-                <p>مفهوم جديد للتسوق يجمع بين التنوع والجودة. اختر ما تريد واستلم طلبك بكل سهولة.</p>
-            </div>
-        </header>
+    try:
+        doc = SimpleDocTemplate(filename, pagesize=letter, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
+        story = []
+        styles = getSampleStyleSheet()
 
-        <main class="products-section">
-            <div class="container">
-                <div class="category-menu">
-                    <h2>الأقسام الرئيسية</h2>
-                    <div id="categoryList" class="category-list">
-                    </div>
-                </div>
-            </div>
-        </main>
+        # تعريف أنماط الفقرات المخصصة
+        styles.add(ParagraphStyle(
+            'InvoiceTitle',
+            fontName=ARABIC_FONT_BOLD,
+            fontSize=30,
+            textColor=colors.HexColor('#2c3e50'),
+            alignment=TA_CENTER,
+            spaceAfter=5,
+        ))
+        styles.add(ParagraphStyle(
+            'MarketAddress',
+            fontName=ARABIC_FONT,
+            fontSize=12,
+            textColor=colors.HexColor('#7f8c8d'),
+            alignment=TA_CENTER,
+            spaceAfter=20,
+        ))
+        styles.add(ParagraphStyle(
+            'SectionHeader',
+            fontName=ARABIC_FONT_BOLD,
+            fontSize=16,
+            textColor=colors.HexColor('#1a5276'),
+            alignment=TA_RIGHT,
+            spaceAfter=10,
+        ))
+        styles.add(ParagraphStyle(
+            'LabelText',
+            fontName=ARABIC_FONT_BOLD,
+            fontSize=12,
+            textColor=colors.HexColor('#4a4a4a'),
+            alignment=TA_RIGHT,
+            spaceAfter=5,
+        ))
+        styles.add(ParagraphStyle(
+            'ValueText',
+            fontName=ARABIC_FONT,
+            fontSize=12,
+            textColor=colors.HexColor('#1c2833'),
+            alignment=TA_RIGHT,
+            spaceAfter=15,
+        ))
+        styles.add(ParagraphStyle(
+            'TotalText',
+            fontName=ARABIC_FONT_BOLD,
+            fontSize=22,
+            textColor=colors.HexColor('#cb4335'),
+            alignment=TA_RIGHT,
+            spaceBefore=15,
+            spaceAfter=20,
+        ))
+        styles.add(ParagraphStyle(
+            'QRCodeLabel',
+            fontName=ARABIC_FONT,
+            fontSize=10,
+            textColor=colors.HexColor('#7f8c8d'),
+            alignment=TA_CENTER,
+            spaceAfter=5,
+        ))
+        styles.add(ParagraphStyle(
+            'TableHeader',
+            fontName=ARABIC_FONT_BOLD,
+            fontSize=12,
+            textColor=colors.HexColor('#ffffff'),
+            alignment=TA_CENTER,
+        ))
+        styles.add(ParagraphStyle(
+            'TableData',
+            fontName=ARABIC_FONT,
+            fontSize=11,
+            textColor=colors.HexColor('#1c2833'),
+            alignment=TA_CENTER,
+        ))
         
-        <footer>
-            <p style="text-align:center; padding: 20px; background-color: var(--primary); color: var(--text-dark);">© 2024 سوبر ماركت العراق. جميع الحقوق محفوظة.</p>
-        </footer>
-    </div>
+        # رأس الفاتورة
+        story.append(Paragraph(rtl("فاتورة طلب من سوبر ماركت العراق"), styles['InvoiceTitle']))
+        story.append(Paragraph(rtl(MARKET_ADDRESS), styles['MarketAddress']))
+        story.append(Spacer(1, 0.2 * inch))
 
-    <div id="productLightbox" class="modal">
-        <div class="modal-content">
-            <span class="close-btn">×</span>
-            <h2 id="lightboxTitle"></h2>
-            <div id="productGrid" class="product-grid-lightbox">
-            </div>
-        </div>
-    </div>
-    
-    <div id="quantityModal" class="modal quantity-modal">
-        <div class="modal-content">
-            <span class="close-btn" id="closeQuantityModalBtn">×</span>
-            <h3 id="quantityModalTitle"></h3>
-            <div class="quantity-input">
-                <button id="decreaseQuantity">-</button>
-                <input type="number" id="productQuantity" value="1" min="1">
-                <button id="increaseQuantity">+</button>
-            </div>
-            <div class="btn-group">
-                <button id="addFinalBtn" class="btn confirm-btn">أضف إلى الطلب</button>
-            </div>
-        </div>
-    </div>
-
-    <div id="addedToCartModal" class="modal added-to-cart-modal">
-        <div class="modal-content">
-            <i class="fas fa-check"></i>
-            <h3>تمت الإضافة إلى طلبك!</h3>
-            <p>أضف المزيد من المنتجات أو تابع عملية الشراء.</p>
-        </div>
-    </div>
-
-    <div id="confirmationModal" class="modal confirmation-modal">
-        <div class="modal-content">
-            <span class="close-btn" id="closeConfirmationBtn">×</span>
-            <div class="order-review">
-                <h2>مراجعة الطلبات</h2>
-                <ul id="orderReviewList">
-                </ul>
-                <h3 id="finalTotal">المجموع الإجمالي: 0 د.ع</h3>
-                <div class="btn-group">
-                    <button id="continueOrderingBtn" class="btn custom-btn">أضف المزيد من المنتجات</button>
-                    <button id="finalizeOrderBtn" class="btn custom-btn">إرسال الطلب</button>
-                </div>
-            </div>
-        </div>
-    </div>
-    
-    <div id="deleteConfirmationModal" class="modal delete-confirmation-modal">
-        <div class="modal-content">
-            <i class="fas fa-trash-alt"></i>
-            <h3>هل أنت متأكد من حذف هذا المنتج؟</h3>
-            <div class="btn-group">
-                <button id="confirmDeleteBtn" class="btn confirm-delete-btn">تأكيد الحذف</button>
-                <button id="cancelDeleteBtn" class="btn cancel-delete-btn">إلغاء</button>
-            </div>
-        </div>
-    </div>
-    
-    <div id="emptyCartModal" class="modal empty-cart-modal">
-        <div class="modal-content">
-            <i class="fas fa-trash-can"></i>
-            <h3>تم حذف الطلبات!</h3>
-        </div>
-    </div>
-
-    <div id="orderModal" class="modal order-modal">
-        <div class="modal-content">
-            <span class="close-btn" id="closeOrderModalBtn">×</span>
-            <h2>إرسال الطلب</h2>
-            <form id="orderForm">
-                <p>الاسم الثلاثي: <input type="text" id="customerName" required></p>
-                <p>رقم الهاتف: <input type="tel" id="customerPhone" required></p>
-                <button type="button" id="sendLocationBtn" class="location-btn">
-                    <span class="gps-icon-container"><i class="fas fa-location-arrow"></i></span>
-                    <span id="locationBtnText">إرسال موقعي</span>
-                </button>
-                <p class="file-input-wrapper">
-                    <label for="houseImage" id="file-input-label" class="file-input-label">
-                        <i class="fas fa-camera"></i>
-                        <span id="file-label-text">أضف صورة الدار من الخارج</span>
-                        <span class="image-loader"></span>
-                    </label>
-                    <input type="file" id="houseImage" accept="image/*">
-                </p>
-                <div class="btn-group">
-                    <button type="submit" class="btn confirm-btn">إرسال</button>
-                </div>
-            </form>
-        </div>
-    </div>
-
-    <div id="successModal" class="modal success-modal">
-        <div class="modal-content">
-            <span class="close-btn" id="closeSuccessModalBtn">×</span>
-            <i class="fas fa-check-circle"></i>
-            <h3>شكراً لك! 🤩</h3>
-            <p>تم استلام طلبك بنجاح! فريقنا سيقوم بمراجعته والتواصل معك لتأكيده وتحديد موعد التسليم. <br> كن مستعداً لألذ وأفضل المنتجات! ✨</p>
-        </div>
-    </div>
-
-    <script>
-        const productsData = {
-            'قسم الألعاب': [
-                { name: 'سيارة قلاب كاملة', price: 7000, img: 'R1.jpg' },
-                { name: 'سيارة قلاب فقط', price: 5000, img: 'R2.jpg' },
-                { name: 'سيارات الأبطال', price: 5000, img: 'R3.jpg' },
-                { name: 'سيارة تحكم', price: 8500, img: 'R4.jpg' },
-                { name: 'دبابة تحكم', price: 10000, img: 'R5.jpg' },
-                { name: 'سيف', price: 3000, img: 'R6.jpg' },
-                { name: 'سهم', price: 5000, img: 'R7.jpg' },
-                { name: 'عدة سهام كاملة', price: 9000, img: 'R8.jpg' },
-                { name: 'دعابل', price: 25, img: 'R9.jpg' },
-                { name: 'هابي بيبيز', price: 3000, img: 'R10.jpg' },
-            ],
-            'قسم القرطاسية': [
-                { name: 'دفتر أبو السيم', price: 3000, img: 'E1.jpg' },
-                { name: 'دفتر أبو السيم نوعية ممتازة', price: 3500, img: 'E2.jpg' },
-                { name: 'بورد', price: 4000, img: 'E3.jpg' },
-                { name: 'أقلام تلوين جاف', price: 2000, img: 'E4.jpg' },
-                { name: 'مقطاطة', price: 250, img: 'E5.jpg' },
-                { name: 'مسطرة', price: 250, img: 'E6.jpg' },
-                { name: 'أقلام جاف', price: 250, img: 'E7.jpg' },
-                { name: 'ألوان', price: 1000, img: 'E8.jpg' },
-                { name: 'قلم رصاص', price: 250, img: 'E9.jpg' },
-                { name: 'قلم رصاص', price: 250, img: 'E10.jpg' },
-                { name: 'قلم رصاص نوعية ممتازة', price: 250, img: 'E11.jpg' },
-            ],
-            'قسم المنظفات والعناية المنزلية': [
-                { name: 'ديتول', price: 1000, img: 'M1.jpg' },
-                { name: 'سالڤو', price: 1500, img: 'M2.jpg' },
-                { name: 'إسفنجة', price: 250, img: 'M3.jpg' },
-                { name: 'العملاق', price: 2000, img: 'M4.jpg' },
-                { name: 'شامبو', price: 3000, img: 'M5.jpg' },
-                { name: 'معجون أسنان', price: 1500, img: 'M6.jpg' },
-                { name: 'صابون لوكس', price: 1000, img: 'M7.jpg' },
-                { name: 'صابون دوف', price: 2500, img: 'M8.jpg' },
-                { name: 'صابون دوف', price: 2500, img: 'M9.jpg' },
-            ],
-            'قسم المثلجات': [
-                { name: 'أم الكبوس', price: 250, img: 'T1.jpg' },
-                { name: 'أم العود', price: 250, img: 'T2.jpg' },
-                { name: 'أوريو', price: 500, img: 'T3.jpg' },
-                { name: 'اوزمو', price: 500, img: 'T4.jpg' },
-                { name: 'فاست', price: 500, img: 'T5.jpg' },
-                { name: 'كبون', price: 500, img: 'T6.jpg' },
-                { name: 'أم الكبوس', price: 250, img: 'T7.jpg' },
-                { name: 'أم العود', price: 250, img: 'T8.jpg' },
-            ],
-            'قسم البقوليات': [
-                { name: 'فاصوليا', price: 2000, img: 'G1.jpg' },
-                { name: 'تمن', price: 2000, img: 'G2.jpg' },
-                { name: 'بازيلاء', price: 750, img: 'G3.jpg' },
-                { name: 'حمص', price: 1500, img: 'G4.jpg' },
-            ],
-            'قسم الشيبس': [
-                { name: 'عمار', price: 250, img: 'V1.jpg' },
-                { name: 'طبوش', price: 250, img: 'V2.jpg' },
-                { name: 'أبو العبد', price: 250, img: 'V3.jpg' },
-                { name: 'دوريتوس', price: 250, img: 'V4.jpg' },
-                { name: 'ليز', price: 250, img: 'V5.jpg' },
-                { name: 'عمان', price: 250, img: 'V6.jpg' },
-                { name: 'البطل', price: 250, img: 'V7.jpg' },
-            ],
-            'قسم المشروبات الباردة': [
-                { name: 'راندي بالمشمش', price: 500, img: 'O1.jpg' },
-                { name: 'راندي بالفراولة', price: 500, img: 'O2.jpg' },
-                { name: 'شاني', price: 500, img: 'O3.jpg' },
-                { name: 'فانتا', price: 500, img: 'O4.jpg' },
-            ],
-            'قسم البهارات': [
-                { name: 'بهارات شاورما', price: 1000, img: 'J1.jpg' },
-                { name: 'بهارات دجاج', price: 1000, img: 'J2.jpg' },
-                { name: 'بابريكا', price: 1000, img: 'J3.jpg' },
-                { name: 'قرفة', price: 1000, img: 'J4.jpg' },
-            ],
-            'قسم البسكويت والكيك': [
-                { name: 'كندر', price: 500, img: 'F1.jpg' },
-                { name: 'أبو الولد', price: 500, img: 'F2.jpg' },
-                { name: 'نمبر ون', price: 250, img: 'F3.jpg' },
-                { name: 'جوكولبس', price: 250, img: 'F4.jpg' },
-                { name: 'گيگ بار', price: 250, img: 'F5.jpg' },
-                { name: 'تيوتكي', price: 250, img: 'F6.jpg' },
-                { name: 'كرواسون', price: 250, img: 'F7.jpg' },
-            ],
-            'قسم اللحوم والأسماك': [
-                { name: 'برغر دجاج', price: 6000, img: 'H1.jpg' },
-                { name: 'كبة دجاج', price: 3000, img: 'H2.jpg' },
-                { name: 'صوصج', price: 1250, img: 'H3.jpg' },
-                { name: 'سمك بلطي', price: 4000, img: 'H4.jpg' },
-                { name: 'سمك زبيدي', price: 6000, img: 'H5.jpg' },
-                { name: 'دجاج مسحب', price: 7000, img: 'H6.jpg' },
-            ]
-        };
-
-        const loadingContainer = document.getElementById('loadingContainer');
-        const mainContent = document.getElementById('mainContent');
-        const categoryList = document.getElementById('categoryList');
-        const productLightbox = document.getElementById('productLightbox');
-        const lightboxTitle = document.getElementById('lightboxTitle');
-        const productGrid = document.getElementById('productGrid');
-        const closeLightboxBtn = document.querySelector('#productLightbox .close-btn');
-        const quantityModal = document.getElementById('quantityModal');
-        const quantityModalTitle = document.getElementById('quantityModalTitle');
-        const productQuantityInput = document.getElementById('productQuantity');
-        const increaseQuantityBtn = document.getElementById('increaseQuantity');
-        const decreaseQuantityBtn = document.getElementById('decreaseQuantity');
-        const addFinalBtn = document.getElementById('addFinalBtn');
-        const closeQuantityModalBtn = document.getElementById('closeQuantityModalBtn');
-        const confirmationModal = document.getElementById('confirmationModal');
-        const orderReviewList = document.getElementById('orderReviewList');
-        const finalTotal = document.getElementById('finalTotal');
-        const continueOrderingBtn = document.getElementById('continueOrderingBtn');
-        const finalizeOrderBtn = document.getElementById('finalizeOrderBtn');
-        const closeConfirmationBtn = document.getElementById('closeConfirmationBtn');
-        const orderModal = document.getElementById('orderModal');
-        const orderForm = document.getElementById('orderForm');
-        const customerNameInput = document.getElementById('customerName');
-        const customerPhoneInput = document.getElementById('customerPhone');
-        const houseImageInput = document.getElementById('houseImage');
-        const fileInputLabel = document.getElementById('file-input-label');
-        const fileLabelText = document.getElementById('file-label-text');
-        const closeOrderModalBtn = document.getElementById('closeOrderModalBtn');
-        const successModal = document.getElementById('successModal');
-        const closeSuccessModalBtn = document.getElementById('closeSuccessModalBtn');
-        const addedToCartModal = document.getElementById('addedToCartModal');
-        const viewOrdersButton = document.getElementById('viewOrdersButton');
-        const sendLocationBtn = document.getElementById('sendLocationBtn');
-        const locationBtnText = document.getElementById('locationBtnText');
-        const deleteConfirmationModal = document.getElementById('deleteConfirmationModal');
-        const confirmDeleteBtn = document.getElementById('confirmDeleteBtn');
-        const cancelDeleteBtn = document.getElementById('cancelDeleteBtn');
-        const emptyCartModal = document.getElementById('emptyCartModal');
-        let itemToDelete = null;
-
-        let cartItems = {};
-        let currentProduct = null;
-        let customerLocation = null;
-        const marketLocation = { lat: 32.6468089, lng: 43.9782430 };
+        # معلومات العميل والطلب
+        story.append(Paragraph(rtl("👤 معلومات العميل"), styles['SectionHeader']))
         
-        const renderUrl = 'https://df-b0o4.onrender.com';
+        info_data = [
+            [Paragraph(rtl("<b>الاسم:</b>"), styles['LabelText']), Paragraph(rtl(order_details['customer']['name']), styles['ValueText'])],
+            [Paragraph(rtl("<b>الهاتف:</b>"), styles['LabelText']), Paragraph(rtl(order_details['customer']['phone']), styles['ValueText'])],
+            [Paragraph(rtl("<b>تاريخ الطلب:</b>"), styles['LabelText']), Paragraph(rtl(datetime.now().strftime('%Y-%m-%d %H:%M')), styles['ValueText'])],
+        ]
         
-        window.addEventListener('DOMContentLoaded', () => {
-            setTimeout(() => {
-                loadingContainer.classList.add('hidden');
-                mainContent.classList.add('show-content');
-                renderCategories();
-            }, 2000);
-        });
+        info_table = Table(info_data, colWidths=[1.5*inch, 5*inch])
+        info_table.setStyle(TableStyle([
+            ('ALIGN', (0, 0), (-1, -1), 'RIGHT'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ]))
+        story.append(info_table)
+        story.append(Spacer(1, 0.3 * inch))
+
+        # جدول المنتجات
+        story.append(Paragraph(rtl("🛒 تفاصيل المنتجات"), styles['SectionHeader']))
         
-        viewOrdersButton.addEventListener('click', () => {
-            if (Object.keys(cartItems).length > 0) {
-                showConfirmationModal();
-            } else {
-                showEmptyCartModal();
-            }
-        });
-
-        function renderCategories() {
-            categoryList.innerHTML = '';
-            const categories = Object.keys(productsData);
-            const categoryIcons = {
-                'قسم الألعاب': 'fas fa-gamepad',
-                'قسم القرطاسية': 'fas fa-pencil-alt',
-                'قسم المنظفات والعناية المنزلية': 'fas fa-broom',
-                'قسم المثلجات': 'fas fa-ice-cream',
-                'قسم البقوليات': 'fas fa-seedling',
-                'قسم الشيبس': 'fas fa-cookie-bite',
-                'قسم المشروبات الباردة': 'fas fa-glass-whiskey',
-                'قسم البهارات': 'fas fa-pepper-hot',
-                'قسم البسكويت والكيك': 'fas fa-cookie',
-                'قسم اللحوم والأسماك': 'fas fa-drumstick-bite',
-            };
-            categories.forEach((category, index) => {
-                const categoryItem = document.createElement('div');
-                categoryItem.className = 'category-item';
-                categoryItem.style.animationDelay = `${index * 0.1}s`;
-                const iconClass = categoryIcons[category] || 'fas fa-box-open';
-                categoryItem.innerHTML = `<i class="${iconClass}"></i><h3>${category}</h3>`;
-                categoryItem.addEventListener('click', () => {
-                    showProducts(category);
-                });
-                categoryList.appendChild(categoryItem);
-            });
-        }
-
-        function showProducts(category) {
-            lightboxTitle.textContent = category;
-            productGrid.innerHTML = '';
-            const categoryProducts = productsData[category];
-            categoryProducts.forEach(product => {
-                const card = document.createElement('div');
-                card.className = 'product-card-lightbox';
-                card.innerHTML = `
-                    <img src="${product.img}" alt="${product.name}">
-                    <div class="product-details">
-                        <h3>${product.name}</h3>
-                        <p class="price">${product.price.toLocaleString('ar-SY')} د.ع</p>
-                    </div>
-                `;
-                card.addEventListener('click', () => {
-                    currentProduct = product;
-                    showQuantityModal(product.name);
-                });
-                productGrid.appendChild(card);
-            });
-            productLightbox.classList.add('show');
-        }
-
-        function showQuantityModal(productName) {
-            quantityModalTitle.textContent = productName;
-            productQuantityInput.value = (cartItems[productName] ? cartItems[productName].quantity : 1);
-            quantityModal.classList.add('show');
-        }
-
-        increaseQuantityBtn.addEventListener('click', () => {
-            productQuantityInput.value = parseInt(productQuantityInput.value) + 1;
-        });
-
-        decreaseQuantityBtn.addEventListener('click', () => {
-            const currentQuantity = parseInt(productQuantityInput.value);
-            if (currentQuantity > 1) {
-                productQuantityInput.value = currentQuantity - 1;
-            }
-        });
-
-        addFinalBtn.addEventListener('click', () => {
-            const quantity = parseInt(productQuantityInput.value);
-            if (quantity > 0 && currentProduct) {
-                cartItems[currentProduct.name] = { quantity: quantity, price: currentProduct.price, name: currentProduct.name };
-                viewOrdersButton.style.display = 'flex';
-                quantityModal.classList.remove('show');
-                productLightbox.classList.remove('show');
-                showAddedToCartModal();
-            }
-        });
+        table_header = [
+            Paragraph(rtl("السعر الإجمالي"), styles['TableHeader']),
+            Paragraph(rtl("السعر"), styles['TableHeader']),
+            Paragraph(rtl("الكمية"), styles['TableHeader']),
+            Paragraph(rtl("المنتج"), styles['TableHeader'])
+        ]
         
-        function showAddedToCartModal() {
-            addedToCartModal.classList.add('show');
-            setTimeout(() => {
-                addedToCartModal.classList.remove('show');
-            }, 1500);
-        }
+        table_data = [table_header]
+        total_price_num = 0
+        items_count = 0
 
-        closeQuantityModalBtn.addEventListener('click', () => {
-            quantityModal.classList.remove('show');
-        });
-
-        closeLightboxBtn.addEventListener('click', () => {
-            productLightbox.classList.remove('show');
-        });
-        
-        closeConfirmationBtn.addEventListener('click', () => {
-            confirmationModal.classList.remove('show');
-        });
-
-        continueOrderingBtn.addEventListener('click', () => {
-            confirmationModal.classList.remove('show');
-            const categorySection = document.querySelector('.products-section');
-            categorySection.scrollIntoView({ behavior: 'smooth' });
-        });
-        
-        finalizeOrderBtn.addEventListener('click', () => {
-            confirmationModal.classList.remove('show');
-            orderModal.classList.add('show');
-        });
-
-        function showConfirmationModal() {
-            orderReviewList.innerHTML = '';
-            let total = 0;
-            for (const name in cartItems) {
-                const item = cartItems[name];
-                total += item.quantity * item.price;
-                const li = document.createElement('li');
-                li.innerHTML = `
-                    <h4>${item.name} (${item.quantity} قطعة)</h4>
-                    <div class="item-actions">
-                        <span class="price">${(item.quantity * item.price).toLocaleString('ar-SY')} د.ع</span>
-                        <button onclick="showDeleteConfirmation('${name}')" class="remove-item-btn"><i class="fas fa-trash-alt"></i></button>
-                    </div>
-                `;
-                orderReviewList.appendChild(li);
-            }
-            finalTotal.textContent = `المجموع الإجمالي: ${total.toLocaleString('ar-SY')} د.ع`;
-            confirmationModal.classList.add('show');
-        }
-        
-        function showDeleteConfirmation(name) {
-            itemToDelete = name;
-            deleteConfirmationModal.classList.add('show');
-        }
-
-        confirmDeleteBtn.addEventListener('click', () => {
-            if (itemToDelete) {
-                delete cartItems[itemToDelete];
-                itemToDelete = null;
-                deleteConfirmationModal.classList.remove('show');
-                if (Object.keys(cartItems).length === 0) {
-                    confirmationModal.classList.remove('show');
-                    viewOrdersButton.style.display = 'none';
-                    showEmptyCartModal();
-                } else {
-                    showConfirmationModal();
-                }
-            }
-        });
-
-        cancelDeleteBtn.addEventListener('click', () => {
-            itemToDelete = null;
-            deleteConfirmationModal.classList.remove('show');
-        });
-        
-        function showEmptyCartModal() {
-            emptyCartModal.classList.add('show');
-            setTimeout(() => {
-                emptyCartModal.classList.remove('show');
-            }, 2000);
-        }
-
-        sendLocationBtn.addEventListener('click', () => {
-            sendLocationBtn.disabled = true;
-            locationBtnText.textContent = 'جاري تحديد الموقع...';
-            sendLocationBtn.classList.remove('success');
-
-            if (navigator.geolocation) {
-                navigator.geolocation.getCurrentPosition(position => {
-                    customerLocation = {
-                        lat: position.coords.latitude,
-                        lng: position.coords.longitude
-                    };
-                    locationBtnText.textContent = 'تم تحديد الموقع بنجاح!';
-                    sendLocationBtn.classList.add('success');
-                    sendLocationBtn.disabled = false;
-                }, error => {
-                    locationBtnText.textContent = 'فشل تحديد الموقع';
-                    sendLocationBtn.classList.remove('success');
-                    sendLocationBtn.disabled = false;
-                    alert('لم نتمكن من الحصول على موقعك. يرجى التأكد من تشغيل GPS والمحاولة مرة أخرى.');
-                    console.error('Geolocation error:', error);
-                });
-            } else {
-                locationBtnText.textContent = 'المتصفح لا يدعم تحديد الموقع';
-                sendLocationBtn.disabled = false;
-                alert('المتصفح لا يدعم تحديد الموقع الجغرافي.');
-            }
-        });
-
-        houseImageInput.addEventListener('change', () => {
-            const fileName = houseImageInput.files[0] ? houseImageInput.files[0].name : 'أضف صورة الدار من الخارج';
-            const label = document.querySelector('.file-input-label');
+        for item_name, item_data in order_details['items'].items():
+            item_total = item_data['price'] * item_data['quantity']
+            total_price_num += item_total
+            items_count += item_data['quantity']
             
-            if (houseImageInput.files[0]) {
-                label.classList.add('selected');
-                label.innerHTML = `<i class="fas fa-check"></i><span id="file-label-text">${fileName}</span>`;
-            } else {
-                label.classList.remove('selected');
-                label.innerHTML = `<i class="fas fa-camera"></i><span id="file-label-text">أضف صورة الدار من الخارج</span>`;
-            }
-        });
+            table_data.append([
+                Paragraph(rtl(f"{item_total:,.0f} د.ع"), styles['TableData']),
+                Paragraph(rtl(f"{item_data['price']:,.0f} د.ع"), styles['TableData']),
+                Paragraph(rtl(str(item_data['quantity'])), styles['TableData']),
+                Paragraph(rtl(item_name), styles['TableData'])
+            ])
+
+        table_style = TableStyle([
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('FONTNAME', (0, 0), (-1, -1), ARABIC_FONT),
+            ('FONTNAME', (0, 0), (-1, 0), ARABIC_FONT_BOLD),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1abc9c')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#ffffff')),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+            ('TOPPADDING', (0, 0), (-1, 0), 10),
+            ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#e9ecef')),
+            ('BOX', (0, 0), (-1, -1), 1, colors.HexColor('#dee2e6')),
+        ])
         
-        orderForm.addEventListener('submit', (e) => {
-            e.preventDefault();
-            
-            const name = customerNameInput.value;
-            const phone = customerPhoneInput.value;
-            const photoFile = houseImageInput.files[0];
+        order_table = Table(table_data, colWidths=[1.5*inch, 1.5*inch, 1*inch, 2.5*inch])
+        order_table.setStyle(table_style)
+        story.append(order_table)
+        story.append(Spacer(1, 0.3 * inch))
 
-            if (!name || !phone) {
-                alert('الرجاء إدخال الاسم ورقم الهاتف.');
-                return;
-            }
-
-            const orderDetails = {
-                customer: {
-                    name: name,
-                    phone: phone,
-                    location: customerLocation
-                },
-                items: cartItems,
-                total: finalTotal.textContent,
-            };
-
-            // Send order details (JSON) to the Python server
-            fetch(`${renderUrl}/send-order`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(orderDetails)
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.status === 'success') {
-                    console.log('Order sent successfully to server.');
-                    // If a photo was selected, send it to a different endpoint
-                    if (photoFile) {
-                        sendTelegramPhoto(photoFile, `صورة الدار من الخارج لطلب السيد ${name}`);
-                    }
-                } else {
-                    console.error('Error sending order to server:', data.message);
-                    alert('حدث خطأ أثناء إرسال الطلب: ' + data.message);
-                }
-            })
-            .catch(error => {
-                console.error('Network error or server down:', error);
-                alert('حدث خطأ في الاتصال بالخادم. قد يكون الخادم غير متوفر حاليًا.');
-            });
-
-            // Show success modals immediately to avoid waiting for API response
-            orderModal.classList.remove('show');
-            successModal.classList.add('show');
-            cartItems = {};
-            viewOrdersButton.style.display = 'none';
-        });
-
-        closeSuccessModalBtn.addEventListener('click', () => {
-            successModal.classList.remove('show');
-            loadingContainer.classList.remove('hidden');
-            mainContent.classList.remove('show-content');
-            setTimeout(() => {
-                loadingContainer.classList.add('hidden');
-                mainContent.classList.add('show-content');
-                renderCategories();
-            }, 2000);
-        });
-
-        closeOrderModalBtn.addEventListener('click', () => {
-            orderModal.classList.remove('show');
-        });
+        # قسم الإجمالي
+        total_summary_data = [
+            [Paragraph(rtl("عدد المنتجات:"), styles['LabelText']), Paragraph(rtl(f"{items_count}"), styles['ValueText'])],
+            [Paragraph(rtl("المجموع الإجمالي:"), styles['TotalText']), Paragraph(rtl(f"{total_price_num:,.0f} د.ع"), styles['TotalText'])]
+        ]
         
-        function sendTelegramPhoto(photoFile, caption) {
-            const formData = new FormData();
-            formData.append('photo', photoFile);
-            formData.append('caption', caption);
+        total_summary_table = Table(total_summary_data, colWidths=[4*inch, 2.5*inch])
+        total_summary_table.setStyle(TableStyle([
+            ('ALIGN', (0, 0), (-1, -1), 'RIGHT'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ]))
+        story.append(total_summary_table)
+        story.append(Spacer(1, 0.4 * inch))
+
+        # باركودات الموقع
+        story.append(Paragraph(rtl("📍 مواقع مهمة"), styles['SectionHeader']))
+        story.append(Spacer(1, 0.2 * inch))
+        
+        qr_data = []
+
+        # باركود موقع المتجر
+        qr_data_market = f"https://www.google.com/maps/search/?api=1&query={MARKET_LOCATION['lat']},{MARKET_LOCATION['lng']}"
+        qr_img_market = qrcode.make(qr_data_market)
+        qr_img_path_market = "qr_market.png"
+        qr_img_market.save(qr_img_path_market)
+        market_image = Image(qr_img_path_market)
+        market_image.drawHeight = 1.5 * inch
+        market_image.drawWidth = 1.5 * inch
+        qr_data.append([market_image, Paragraph(rtl("امسح لموقع المتجر"), styles['QRCodeLabel'])])
+        
+        # باركود موقع العميل
+        if order_details['customer']['location']:
+            lat = order_details['customer']['location']['lat']
+            lng = order_details['customer']['location']['lng']
+            qr_data_customer = f"https://www.google.com/maps/search/?api=1&query={lat},{lng}"
+            qr_img_customer = qrcode.make(qr_data_customer)
+            qr_img_path_customer = "qr_customer.png"
+            qr_img_customer.save(qr_img_path_customer)
+            customer_image = Image(qr_img_path_customer)
+            customer_image.drawHeight = 1.5 * inch
+            customer_image.drawWidth = 1.5 * inch
+            qr_data.append([customer_image, Paragraph(rtl("امسح لموقع العميل"), styles['QRCodeLabel'])])
             
-            fetch(`${renderUrl}/send-photo`, {
-                method: 'POST',
-                body: formData
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.status === 'success') {
-                    console.log('Photo sent successfully.');
-                } else {
-                    console.error('Error sending photo:', data.message);
-                    alert('فشل إرسال الصورة: ' + data.message);
-                }
-            })
-            .catch(error => console.error('Error sending photo to Telegram:', error));
-        }
-    </script>
-</body>
-</html>
+            # حساب المسافة وإضافتها
+            distance = haversine_distance(MARKET_LOCATION['lat'], MARKET_LOCATION['lng'], lat, lng)
+            story.append(Paragraph(rtl(f"<b>المسافة بين المتجر والعميل:</b> {distance:,.2f} متر"), styles['LabelText']))
+            story.append(Spacer(1, 0.2 * inch))
+        else:
+            story.append(Paragraph(rtl("<b>ملاحظة:</b> لم يتم توفير موقع العميل."), styles['LabelText']))
+            story.append(Spacer(1, 0.2 * inch))
+        
+        # باركود الصورة المرفقة
+        if photo_link:
+            story.append(Paragraph(rtl("🖼️ الصورة المرفقة"), styles['SectionHeader']))
+            story.append(Spacer(1, 0.2 * inch))
+
+            qr_img_photo = qrcode.make(photo_link)
+            qr_img_path_photo = "qr_photo.png"
+            qr_img_photo.save(qr_img_path_photo)
+            
+            photo_image_qr = Image(qr_img_path_photo)
+            photo_image_qr.drawHeight = 1.5 * inch
+            photo_image_qr.drawWidth = 1.5 * inch
+
+            qr_data.append([photo_image_qr, Paragraph(rtl("امسح لرؤية الصورة"), styles['QRCodeLabel'])])
+            
+        # إنشاء الجدول للباركودات
+        qr_table_data = [[item[0] for item in qr_data], [item[1] for item in qr_data]]
+        qr_table = Table(qr_table_data, colWidths=[2*inch] * len(qr_data), hAlign='CENTER')
+        qr_table.setStyle(TableStyle([
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+            ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+        ]))
+        
+        story.append(qr_table)
+        story.append(Spacer(1, 0.5 * inch))
+
+        # تذييل الفاتورة
+        footer_style = ParagraphStyle(
+            'FooterStyle',
+            fontName=ARABIC_FONT,
+            fontSize=10,
+            textColor=colors.HexColor('#7f8c8d'),
+            alignment=TA_CENTER,
+        )
+        story.append(Paragraph(rtl("شكراً لثقتكم بنا. نتمنى لكم يوماً سعيداً."), footer_style))
+
+        doc.build(story)
+        print(f"تم إنشاء ملف PDF بنجاح: {filename}")
+        return filename
+
+    except Exception as e:
+        print(f"خطأ في إنشاء ملف PDF: {e}")
+        return None
+    finally:
+        # حذف صور QR بعد استخدامها
+        if qr_img_path_customer and os.path.exists(qr_img_path_customer):
+            os.remove(qr_img_path_customer)
+        if qr_img_path_market and os.path.exists(qr_img_path_market):
+            os.remove(qr_img_path_market)
+        if qr_img_path_photo and os.path.exists(qr_img_path_photo):
+            os.remove(qr_img_path_photo)
+        print("تم حذف صور QR المؤقتة.")
+
+
+# API: إرسال صورة
+@app.route('/send-photo', methods=['POST'])
+def send_photo():
+    try:
+        if 'photo' not in request.files:
+            return jsonify({'status': 'error', 'message': 'لم يتم توفير ملف الصورة.'}), 400
+        
+        photo_file = request.files['photo']
+        
+        if photo_file.filename == '':
+            return jsonify({'status': 'error', 'message': 'لم يتم اختيار ملف.'}), 400
+        
+        caption = request.form.get('caption', 'صورة مرفقة بالطلب.')
+        
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+        
+        temp_path = f"temp_{photo_file.filename}"
+        photo_file.save(temp_path)
+        
+        with open(temp_path, 'rb') as f:
+            files = {'photo': f}
+            data = {'chat_id': CHAT_ID, 'caption': caption}
+            response = requests.post(url, data=data, files=files, timeout=30)
+        
+        os.remove(temp_path)
+        
+        response.raise_for_status()
+        
+        file_id = response.json()['result']['photo'][-1]['file_id']
+        photo_link = get_file_link(file_id)
+        
+        print(f"تم إرسال الصورة بنجاح: {response.json()}")
+        return jsonify({'status': 'success', 'message': 'تم إرسال الصورة بنجاح.', 'photo_link': photo_link})
+
+    except requests.exceptions.RequestException as e:
+        print(f"خطأ في إرسال الصورة إلى تيليجرام: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+    except Exception as e:
+        print(f"خطأ غير متوقع: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# API: استقبال الطلب
+@app.route('/send-order', methods=['POST'])
+def send_order():
+    try:
+        order_details = request.get_json()
+
+        text_message = f"<b>✅ طلب جديد من السوبر ماركت:</b>\n\n"
+        text_message += f"<b>- الاسم:</b> {order_details['customer']['name']}\n"
+        text_message += f"<b>- الهاتف:</b> {order_details['customer']['phone']}\n"
+        
+        if 'location' in order_details['customer'] and order_details['customer']['location']:
+            lat = order_details['customer']['location']['lat']
+            lng = order_details['customer']['location']['lng']
+            distance = haversine_distance(MARKET_LOCATION['lat'], MARKET_LOCATION['lng'], lat, lng)
+            text_message += f"<b>- الإحداثيات:</b> <a href='https://www.google.com/maps/search/?api=1&query={lat},{lng}'>الموقع الجغرافي</a>\n"
+            text_message += f"<b>- المسافة عن المتجر:</b> {distance:,.2f} متر\n"
+        else:
+            text_message += f"<b>- ملاحظة:</b> لم يتمكن العميل من إرسال موقعه الجغرافي.\n"
+        
+        text_message += f"\n<b><u>المنتجات:</u></b>\n"
+        total_price = 0
+        for item_name, item_data in order_details['items'].items():
+            item_total = item_data['price'] * item_data['quantity']
+            total_price += item_total
+            text_message += f"• {item_name} (الكمية: {item_data['quantity']}) - السعر: {item_total:,.0f} د.ع\n"
+        
+        text_message += f"\n<b>المجموع الإجمالي: {total_price:,.0f} د.ع</b>"
+
+        send_telegram_message(text_message)
+        
+        photo_link = order_details.get('photo_link')
+        
+        pdf_file = create_order_pdf(order_details, photo_link)
+        if pdf_file:
+            send_telegram_document(
+                pdf_file, 
+                caption=f"فاتورة طلب السيد {order_details['customer']['name']} - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+            )
+
+        return jsonify({'status': 'success', 'message': 'تم إرسال الطلب والفاتورة بنجاح.'})
+
+    except Exception as e:
+        print(f"خطأ في معالجة الطلب: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=os.environ.get('PORT', 5000), debug=True)
+
